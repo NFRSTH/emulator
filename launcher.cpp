@@ -40,6 +40,8 @@ static const char* GB_ACTIONS[] = {"Up","Down","Left","Right","A","B","Start","S
 static const char* C8_ACTIONS[] = {"0","1","2","3","4","5","6","7","8","9","A","B","C","D","E","F",nullptr};
 static int GB_DEFAULT_KEYS[] = {VK_UP,VK_DOWN,VK_LEFT,VK_RIGHT,'X','Z',VK_RETURN,VK_BACK};
 static int C8_DEFAULT_KEYS[] = {'X','1','2','3','4','Q','W','E','R','A','S','D','F','Z','C','V'};
+static const char* NES_ACTIONS[] = {"Up","Down","Left","Right","A","B","Start","Select",nullptr};
+static int NES_DEFAULT_KEYS[] = {VK_UP,VK_DOWN,VK_LEFT,VK_RIGHT,'X','Z',VK_RETURN,VK_BACK};
 // C8 hex key 0->'X', 1->'1', 2->'2', 3->'3', 4->'4', 5->'Q', 6->'W', 7->'E',
 // 8->'R', 9->'A', A->'S', B->'D', C->'F', D->'Z', E->'C', F->'V'
 static const char* SI_ACTIONS[] = {"Left","Right","Fire","Coin","1P","2P",nullptr};
@@ -63,6 +65,7 @@ static void set_default_bindings(ConsoleEntry& c, const char** acts, int* keys) 
 #include "savestate.hpp"
 #include "invaders.hpp"
 #include "atari2600.hpp"
+#include "nes.hpp"
 
 static const int GB_W = 160, GB_H = 144, GB_SCALE = 3;
 static Cartridge gb_cart; static MMU gb_mmu; static PPU gb_ppu; static CPU gb_cpu;
@@ -650,6 +653,106 @@ static bool run_a2600(const char* path, HINSTANCE hi, ConsoleEntry& ce) {
     a26_audio.close(); DestroyWindow(hw); return true;
 }
 
+// ===================== NES Emulator =====================
+static const int NES_W = 256, NES_H = 240, NES_SCL = 3;
+static NES nes; static bool nes_run;
+static int nes_k_up, nes_k_down, nes_k_left, nes_k_right, nes_k_a, nes_k_b, nes_k_start, nes_k_select;
+static char nes_rom_path[1024];
+static AudioOut nes_audio;
+
+static LRESULT CALLBACK nes_wp(HWND h, UINT m, WPARAM w, LPARAM l) {
+    switch (m) {
+        case WM_KEYDOWN: {
+            int k = w & 0xFF;
+            if (k == nes_k_up) nes.joy1[0] = true;
+            else if (k == nes_k_down) nes.joy1[1] = true;
+            else if (k == nes_k_left) nes.joy1[2] = true;
+            else if (k == nes_k_right) nes.joy1[3] = true;
+            else if (k == nes_k_a) nes.joy1[4] = true;
+            else if (k == nes_k_b) nes.joy1[5] = true;
+            else if (k == nes_k_start) nes.joy1[6] = true;
+            else if (k == nes_k_select) nes.joy1[7] = true;
+            if (w == VK_F5) /* save state not implemented */;
+            if (w == VK_F7) /* load state not implemented */;
+            return 0;
+        }
+        case WM_KEYUP: {
+            int k = w & 0xFF;
+            if (k == nes_k_up) nes.joy1[0] = false;
+            else if (k == nes_k_down) nes.joy1[1] = false;
+            else if (k == nes_k_left) nes.joy1[2] = false;
+            else if (k == nes_k_right) nes.joy1[3] = false;
+            else if (k == nes_k_a) nes.joy1[4] = false;
+            else if (k == nes_k_b) nes.joy1[5] = false;
+            else if (k == nes_k_start) nes.joy1[6] = false;
+            else if (k == nes_k_select) nes.joy1[7] = false;
+            return 0;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
+            RECT r; GetClientRect(h, &r); int ww = r.right, hh = r.bottom;
+            int sc = ww / NES_W < hh / NES_H ? ww / NES_W : hh / NES_H;
+            int ox = (ww - NES_W * sc) / 2, oy = (hh - NES_H * sc) / 2;
+            for (int py = 0; py < NES_H; py++) for (int px = 0; px < NES_W; px++) {
+                uint32_t cl = nes.framebuffer[py * NES_W + px];
+                HBRUSH br = CreateSolidBrush(RGB(cl >> 16 & 0xFF, cl >> 8 & 0xFF, cl & 0xFF));
+                RECT cr = {ox + px * sc, oy + py * sc, ox + (px + 1) * sc, oy + (py + 1) * sc};
+                FillRect(dc, &cr, br); DeleteObject(br);
+            }
+            EndPaint(h, &ps); return 0;
+        }
+        case WM_DESTROY: nes_run = false; return 0;
+    }
+    return DefWindowProcA(h, m, w, l);
+}
+
+static bool run_nes(const char* path, HINSTANCE hi, ConsoleEntry& ce) {
+    static bool cr = false;
+    if (!cr) {
+        WNDCLASSA wc = {0}; wc.style = CS_HREDRAW | CS_VREDRAW; wc.lpfnWndProc = nes_wp;
+        wc.hInstance = hi; wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.lpszClassName = "NESClass";
+        RegisterClassA(&wc); cr = true;
+    }
+    nes.init(); if (!nes.load(path)) return false;
+    strcpy(nes_rom_path, path);
+    nes_run = true;
+    for (int i = 0; i < 8; i++) nes.joy1[i] = false;
+    nes_k_up = ce.get_key("Up", VK_UP); nes_k_down = ce.get_key("Down", VK_DOWN);
+    nes_k_left = ce.get_key("Left", VK_LEFT); nes_k_right = ce.get_key("Right", VK_RIGHT);
+    nes_k_a = ce.get_key("A", 'X'); nes_k_b = ce.get_key("B", 'Z');
+    nes_k_start = ce.get_key("Start", VK_RETURN); nes_k_select = ce.get_key("Select", VK_BACK);
+
+    // Wait for PPU to stabilize for a few frames
+    for (int i = 0; i < 60; i++) nes.run_frame();
+    nes.frame_done = false;
+
+    nes_audio.open();
+
+    RECT wr = {0, 0, NES_W * NES_SCL, NES_H * NES_SCL};
+    AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME, FALSE);
+    const char* p = strrchr(path, '\\');
+    char t[256]; snprintf(t, sizeof(t), "NES - %s", p ? p + 1 : path);
+    HWND hw = CreateWindowExA(0, "NESClass", t, WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME,
+        CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top, NULL, NULL, hi, NULL);
+    if (!hw) return false;
+    ShowWindow(hw, SW_SHOW); UpdateWindow(hw);
+
+    LARGE_INTEGER f, l; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&l);
+    const double ft = 1.0 / 60.0; MSG msg;
+    while (nes_run && GetMessageA(&msg, NULL, 0, 0)) {
+        do { TranslateMessage(&msg); DispatchMessageA(&msg); } while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE));
+        if (!nes_run || !IsWindow(hw)) break;
+        nes.run_frame();
+        { int16_t abuf[AUDIO_SAMPLES]; nes.gen_audio(abuf, AUDIO_SAMPLES, AUDIO_SR); nes_audio.push(abuf, AUDIO_SAMPLES); }
+        InvalidateRect(hw, NULL, FALSE); UpdateWindow(hw);
+        LARGE_INTEGER n; QueryPerformanceCounter(&n);
+        double e = (double)(n.QuadPart - l.QuadPart) / f.QuadPart;
+        double sl = (ft - e) * 1000.0; if (sl > 0) Sleep((DWORD)sl);
+        QueryPerformanceCounter(&l);
+    }
+    nes_audio.close(); DestroyWindow(hw); return true;
+}
+
 // ===================== Config =====================
 static const char* CFG_FILE = "consoles.cfg";
 static const char* LAUNCHER_TITLE = "Console Launcher";
@@ -748,6 +851,7 @@ static void launch(int idx, HINSTANCE hi) {
         else if (c.name == "Chip-8") ok = run_chip8(rom, hi, c);
         else if (c.name == "Space Invaders") ok = run_invaders(rom, hi, c);
         else if (c.name == "Atari 2600") ok = run_a2600(rom, hi, c);
+        else if (c.name == "NES") ok = run_nes(rom, hi, c);
         EnableWindow(GetParent(hList), TRUE); SetForegroundWindow(GetParent(hList));
         if (!ok) MessageBoxA(GetParent(hList), "Failed to start emulator.", "Error", MB_OK | MB_ICONERROR);
     } else {
@@ -829,6 +933,7 @@ static void show_add(HWND p) {
         else if (c.name == "Chip-8") set_default_bindings(c, C8_ACTIONS, C8_DEFAULT_KEYS);
         else if (c.name == "Space Invaders") set_default_bindings(c, SI_ACTIONS, SI_DEFAULT_KEYS);
         else if (c.name == "Atari 2600") set_default_bindings(c, A26_ACTIONS, A26_DEFAULT_KEYS);
+        else if (c.name == "NES") set_default_bindings(c, NES_ACTIONS, NES_DEFAULT_KEYS);
         consoles.push_back(c); refr_list(); save_cfg();
     }
 }
@@ -906,6 +1011,7 @@ static LRESULT CALLBACK set_wp(HWND h, UINT m, WPARAM w, LPARAM l) {
                     else if (set_entry->name == "Chip-8") set_default_bindings(*set_entry, C8_ACTIONS, C8_DEFAULT_KEYS);
                     else if (set_entry->name == "Space Invaders") set_default_bindings(*set_entry, SI_ACTIONS, SI_DEFAULT_KEYS);
                     else if (set_entry->name == "Atari 2600") set_default_bindings(*set_entry, A26_ACTIONS, A26_DEFAULT_KEYS);
+                    else if (set_entry->name == "NES") set_default_bindings(*set_entry, NES_ACTIONS, NES_DEFAULT_KEYS);
                     set_capturing = -1;
                     refr_set_list();
                 }
@@ -1025,6 +1131,8 @@ LRESULT CALLBACK main_wp(HWND hw, UINT m, WPARAM w, LPARAM l) {
                 set_default_bindings(d, SI_ACTIONS, SI_DEFAULT_KEYS); consoles.push_back(d);
                 d.name="Atari 2600"; d.emulator="internal"; d.extensions=".a26;.bin;.rom"; d.filter="Atari 2600 ROMs (*.a26;*.bin;*.rom)";
                 set_default_bindings(d, A26_ACTIONS, A26_DEFAULT_KEYS); consoles.push_back(d);
+                d.name="NES"; d.emulator="internal"; d.extensions=".nes;.rom"; d.filter="NES ROMs (*.nes;*.rom)";
+                set_default_bindings(d, NES_ACTIONS, NES_DEFAULT_KEYS); consoles.push_back(d);
                 save_cfg(); refr_list();
             }
             return 0;
