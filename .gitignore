@@ -1,0 +1,8 @@
+*.o
+*.exe
+*.sav
+*.st0
+*.st1
+*.st2
+*.st3
+sdl_launcher
