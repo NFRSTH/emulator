@@ -461,10 +461,10 @@ struct A2600 {
             if (m0_on && bl_on) cxm0fb |= 0x80;
             if (m1_on && pf_on) cxm1fb |= 0x40;
             if (m1_on && bl_on) cxm1fb |= 0x80;
-            if (m0_on && p1_on) cxm0p |= 0x40;
-            if (m0_on && p0_on) cxm0p |= 0x80;
-            if (m1_on && p0_on) cxm1p |= 0x40;
-            if (m1_on && p1_on) cxm1p |= 0x80;
+            if (m0_on && p1_on) cxm0p |= 0x80;
+            if (m0_on && p0_on) cxm0p |= 0x40;
+            if (m1_on && p0_on) cxm1p |= 0x80;
+            if (m1_on && p1_on) cxm1p |= 0x40;
             if (bl_on && pf_on) cxblpf |= 0x40;
             if (p0_on && p1_on) cxppmm |= 0x40;
             if (m0_on && m1_on) cxppmm |= 0x80;

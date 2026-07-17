@@ -76,10 +76,6 @@ static void init_keymap() {
     map(SDL_SCANCODE_F7, VK_F7);
 }
 
-static int vk_from_sdl(SDL_Scancode s) {
-    return key_scan[s] ? key_scan[s] : (int)s;
-}
-
 // ========== Gameboy ==========
 static const int GB_W = 160, GB_H = 144, GB_SCALE = 3;
 static Cartridge gb_cart; static MMU gb_mmu; static PPU gb_ppu; static CPU gb_cpu;
@@ -132,13 +128,55 @@ struct GbPulse {
     }
 };
 
+struct GbWave {
+    uint32_t phase;
+    int freq, volume_shift;
+    bool on, dac_enabled, len_enabled;
+    int length;
+    void reg_write(int addr, uint8_t v) {
+        if (addr == 0) { dac_enabled = v & 0x80; if (!dac_enabled) on = false; }
+        else if (addr == 1) { length = (256 - v); }
+        else if (addr == 2) { volume_shift = ((v >> 5) & 3) ? 5 - ((v >> 5) & 3) : 4; }
+        else if (addr == 3) { freq = (freq & 0x700) | v; }
+        else if (addr == 4) {
+            freq = (freq & 0xFF) | ((v & 7) << 8);
+            len_enabled = v & 0x40;
+            if (v & 0x80) { on = dac_enabled; phase = 0; }
+        }
+    }
+};
+
+struct GbNoise {
+    uint32_t phase;
+    uint16_t lfsr;
+    int shift, r, width;
+    int volume, env_vol, env_dir, env_period, env_timer;
+    int length;
+    bool on, dac_enabled, len_enabled;
+    void reg_write(int addr, uint8_t v) {
+        if (addr == 1) { length = (64 - (v & 63)) * 2; }
+        else if (addr == 2) { env_vol = v >> 4; env_dir = (v >> 3) & 1; env_period = v & 7; volume = env_vol; env_timer = env_period; }
+        else if (addr == 3) { shift = (v >> 4) & 0xF; width = (v >> 3) & 1; r = v & 7; }
+        else if (addr == 4) {
+            len_enabled = v & 0x40;
+            if (v & 0x80) {
+                dac_enabled = env_vol > 0 || env_period > 0;
+                on = dac_enabled; lfsr = 0x7FFF; volume = env_vol; env_timer = env_period; phase = 0;
+            }
+        }
+    }
+};
+
 static GbPulse gb_p1, gb_p2;
+static GbWave gb_wave;
+static GbNoise gb_noise;
 static int gb_sweep_frame_count;
 
 static void gb_gen_audio() {
     int16_t buf[AUDIO_SAMPLES];
     for (int i = 0; i < AUDIO_SAMPLES; i++) {
         int mix = 0;
+
         for (auto* ch : {&gb_p1, &gb_p2}) {
             if (!ch->on || ch->volume == 0) continue;
             int pat = GB_DUTY[ch->duty][(ch->phase >> 14) & 7];
@@ -147,6 +185,32 @@ static void gb_gen_audio() {
             if (inc < 1) inc = 1;
             ch->phase += inc;
         }
+
+        if (gb_wave.on && gb_wave.dac_enabled) {
+            int pos = (gb_wave.phase >> 14) & 0x1F;
+            int nibble = (gb_mmu.io[0x30 + pos / 2] >> (4 * (1 - (pos & 1)))) & 0xF;
+            int vol = gb_wave.volume_shift == 4 ? 0 : nibble >> gb_wave.volume_shift;
+            mix += vol * 150;
+            int inc = (131072 / (2048 - gb_wave.freq)) * 65536 / AUDIO_SR;
+            if (inc < 1) inc = 1;
+            gb_wave.phase += inc;
+        }
+
+        if (gb_noise.on && gb_noise.volume > 0) {
+            int div = (gb_noise.r + 1) * (1 << (gb_noise.shift + 1));
+            if (div < 1) div = 1;
+            int inc = (131072 / div) * 65536 / AUDIO_SR;
+            if (inc < 1) inc = 1;
+            uint32_t old = gb_noise.phase;
+            gb_noise.phase += inc;
+            if (gb_noise.phase < old) {
+                uint16_t bit = (gb_noise.lfsr & 1) ^ ((gb_noise.lfsr >> 1) & 1);
+                gb_noise.lfsr >>= 1;
+                gb_noise.lfsr |= bit << (gb_noise.width ? 6 : 14);
+            }
+            if (!(gb_noise.lfsr & 1)) mix += gb_noise.volume * 600;
+        }
+
         buf[i] = (int16_t)(mix > 32767 ? 32767 : mix < -32768 ? -32768 : mix);
     }
     audio_push(buf, AUDIO_SAMPLES);
@@ -162,15 +226,27 @@ static void gb_apu_tick() {
     gb_p2.reg_write(2, gb_mmu.io[0x17]);
     gb_p2.reg_write(3, gb_mmu.io[0x18]);
     gb_p2.reg_write(4, gb_mmu.io[0x19]);
+    gb_wave.reg_write(0, gb_mmu.io[0x1A]);
+    gb_wave.reg_write(1, gb_mmu.io[0x1B]);
+    gb_wave.reg_write(2, gb_mmu.io[0x1C]);
+    gb_wave.reg_write(3, gb_mmu.io[0x1D]);
+    gb_wave.reg_write(4, gb_mmu.io[0x1E]);
+    gb_noise.reg_write(1, gb_mmu.io[0x21]);
+    gb_noise.reg_write(2, gb_mmu.io[0x22]);
+    gb_noise.reg_write(3, gb_mmu.io[0x23]);
+    gb_noise.reg_write(4, gb_mmu.io[0x24]);
     if (gb_p1.len_enabled && ++gb_p1.length > 128) gb_p1.on = false;
     if (gb_p2.len_enabled && ++gb_p2.length > 128) gb_p2.on = false;
-    for (auto* ch : {&gb_p1, &gb_p2}) {
+    if (gb_wave.len_enabled && ++gb_wave.length > 256) gb_wave.on = false;
+    if (gb_noise.len_enabled && ++gb_noise.length > 128) gb_noise.on = false;
+    auto env_tick = [](auto* ch) {
         if (ch->env_period && ch->env_timer-- <= 0) {
             ch->env_timer = ch->env_period;
             if (ch->env_dir) { if (ch->volume < 15) ch->volume++; }
             else { if (ch->volume > 0) ch->volume--; }
         }
-    }
+    };
+    env_tick(&gb_p1); env_tick(&gb_p2); env_tick(&gb_noise);
     if (++gb_sweep_frame_count >= 128) {
         gb_sweep_frame_count = 0;
         gb_p1.sweep_tick();
@@ -210,7 +286,7 @@ static void gb_upd_inp() {
 
 static void gb_run_fr() {
     int c = 0;
-    while (c < 70224) { int c2 = gb_cpu.tick(); for (int i = 0; i < c2; i += 4) gb_ppu.step(4); gb_upd_timer(c2); c += c2; }
+    while (c < 70224) { int c2 = gb_cpu.tick(); gb_mmu.dma_step(c2); for (int i = 0; i < c2; i += 4) gb_ppu.step(4); gb_upd_timer(c2); c += c2; }
     gb_ppu.frame_complete = false;
 }
 
@@ -226,7 +302,7 @@ static bool run_gameboy(const char* path, SDL_Window* win) {
     gb_k_up = VK_UP; gb_k_down = VK_DOWN; gb_k_left = VK_LEFT; gb_k_right = VK_RIGHT;
     gb_k_a = 'X'; gb_k_b = 'Z'; gb_k_start = VK_RETURN; gb_k_select = VK_BACK;
 
-    gb_p1 = GbPulse(); gb_p2 = GbPulse(); gb_sweep_frame_count = 0;
+    gb_p1 = GbPulse(); gb_p2 = GbPulse(); gb_wave = GbWave(); gb_noise = GbNoise(); gb_sweep_frame_count = 0;
     audio_init();
 
     SDL_Surface* surf = SDL_GetWindowSurface(win);
@@ -297,7 +373,6 @@ static bool run_chip8(const char* path, SDL_Window* win) {
             if (e.type == SDL_QUIT) { c8_run = false; break; }
             if (e.type == SDL_KEYDOWN) {
                 int k = e.key.keysym.scancode;
-                for (int i = 0; i < 16; i++) c8.keys[i] = false;
                 if (k == SDL_SCANCODE_X) c8.keys[0] = true;
                 else if (k == SDL_SCANCODE_1) c8.keys[1] = true;
                 else if (k == SDL_SCANCODE_2) c8.keys[2] = true;
@@ -382,8 +457,8 @@ static bool run_invaders(const char* path, SDL_Window* win) {
             if (e.type == SDL_QUIT) { si_run = false; break; }
             if (e.type == SDL_KEYDOWN) {
                 auto sc = e.key.keysym.scancode;
-                if (sc == SDL_SCANCODE_LEFT) si.in0 &= ~0x20;
-                else if (sc == SDL_SCANCODE_RIGHT) si.in0 &= ~0x10;
+                if (sc == SDL_SCANCODE_LEFT) si.in0 &= ~0x10;
+                else if (sc == SDL_SCANCODE_RIGHT) si.in0 &= ~0x20;
                 else if (sc == SDL_SCANCODE_Z) si.in0 &= ~0x08;
                 else if (sc == SDL_SCANCODE_5) si.in0 &= ~0x01;
                 else if (sc == SDL_SCANCODE_1) si.in0 &= ~0x04;
@@ -393,8 +468,8 @@ static bool run_invaders(const char* path, SDL_Window* win) {
             }
             if (e.type == SDL_KEYUP) {
                 auto sc = e.key.keysym.scancode;
-                if (sc == SDL_SCANCODE_LEFT) si.in0 |= 0x20;
-                else if (sc == SDL_SCANCODE_RIGHT) si.in0 |= 0x10;
+                if (sc == SDL_SCANCODE_LEFT) si.in0 |= 0x10;
+                else if (sc == SDL_SCANCODE_RIGHT) si.in0 |= 0x20;
                 else if (sc == SDL_SCANCODE_Z) si.in0 |= 0x08;
                 else if (sc == SDL_SCANCODE_5) si.in0 |= 0x01;
                 else if (sc == SDL_SCANCODE_1) si.in0 |= 0x04;

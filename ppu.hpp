@@ -104,12 +104,12 @@ struct PPU {
     }
 
     uint8_t read_oam(uint16_t addr) {
-        if (mode < 3 && mode > 0) return oam[addr];
+        if (mode < 2) return oam[addr];
         return 0xFF;
     }
 
     void write_oam(uint16_t addr, uint8_t val) {
-        if (mode < 3) oam[addr] = val;
+        if (mode < 2) oam[addr] = val;
     }
 
     void step(int cycles) {

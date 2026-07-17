@@ -797,12 +797,11 @@ struct CPU {
         uint8_t a = A();
         if (!get_n()) {
             if (get_h() || (a & 0x0F) > 9) a += 6;
-            if (get_c() || a > 0x9F) a += 0x60;
+            if (get_c() || a > 0x99) { a += 0x60; set_c(1); }
         } else {
-            if (get_h() || (a & 0x0F) > 9) a -= 6;
-            if (get_c() || a > 0x9F) a -= 0x60;
+            if (get_h()) a -= 6;
+            if (get_c()) a -= 0x60;
         }
-        set_c(get_c() || (a > 0x9F));
         set_z(a == 0);
         set_h(0);
         A() = a;

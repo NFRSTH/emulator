@@ -130,7 +130,7 @@ struct Invaders8080 {
             case 0x27: { // DAA
                 uint16_t v = a; uint8_t cy = f & 1, ac = (f >> 4) & 1;
                 if (ac || (v & 0x0F) > 9) { v += 6; }
-                if (cy || (v & 0xF0) > 0x90 || (v > 0x99 && !ac)) { v += 0x60; f |= 1; } else f &= ~1;
+                if (cy || (v & 0xF0) > 0x90 || v > 0x99) { v += 0x60; f |= 1; } else f &= ~1;
                 a = v & 0xFF; set_szp(a); return 4;
             }
             case 0x28: return 4;
