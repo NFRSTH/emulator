@@ -308,6 +308,10 @@ struct SMS {
     uint8_t joy1_state;
     bool joy1_pins[8];
 
+    ~SMS() {
+        delete[] rom;
+    }
+
     void init() {
         memset(wram, 0, sizeof(wram));
         port_3E = 0;
@@ -355,6 +359,16 @@ struct SMS {
         }
         mapper = (rom_size >= 0x20000) ? 1 : 0;
         init();
+        page0 = rom;
+        page1 = rom + (rom_size >= 0x4000 ? 0x4000 : 0);
+        page2 = rom + (rom_size >= 0x8000 ? 0x8000 : 0);
+        if (rom_size < 0x4000) {
+            page1 = rom; page2 = rom;
+        } else if (rom_size < 0x8000) {
+            page2 = page1;
+        }
+        mapper = (rom_size >= 0x20000) ? 1 : 0;
+        cpu.pc = mem_rw(0xFFFC);
         return true;
     }
 
@@ -1055,9 +1069,9 @@ int Z80::ix_exec() {
         case 0x6E: { int8_t d = (int8_t)mem_rb(pc++); l = mem_rb(ix() + d); cycles = 19; break; }
         case 0x6F: ixl = a; break;
         case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x77: {
-            int8_t d = (int8_t)mem_rb(pc++);
-            static const uint8_t rmap[] = {0,b,c,d,e,h,l,0,a};
-            mem_wb(ix() + d, rmap[op2 & 7]);
+            int8_t disp = (int8_t)mem_rb(pc++);
+            static const uint8_t rmap[] = {b,c,d,e,h,l,0,a};
+            mem_wb(ix() + disp, rmap[op2 & 7]);
             cycles = 19; break;
         }
         case 0x7E: { int8_t d = (int8_t)mem_rb(pc++); a = mem_rb(ix() + d); cycles = 19; break; }
@@ -1196,9 +1210,9 @@ int Z80::iy_exec() {
         case 0x6E: { int8_t d = (int8_t)mem_rb(pc++); l = mem_rb(iy() + d); cycles = 19; break; }
         case 0x6F: iyl = a; break;
         case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x77: {
-            int8_t d = (int8_t)mem_rb(pc++);
-            static const uint8_t rmap[] = {0,b,c,d,e,h,l,0,a};
-            mem_wb(iy() + d, rmap[op2 & 7]);
+            int8_t disp = (int8_t)mem_rb(pc++);
+            static const uint8_t rmap[] = {b,c,d,e,h,l,0,a};
+            mem_wb(iy() + disp, rmap[op2 & 7]);
             cycles = 19; break;
         }
         case 0x7E: { int8_t d = (int8_t)mem_rb(pc++); a = mem_rb(iy() + d); cycles = 19; break; }

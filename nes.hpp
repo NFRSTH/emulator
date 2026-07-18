@@ -77,6 +77,11 @@ struct NES {
     // iNES header detection
     uint8_t header[16];
 
+    ~NES() {
+        delete[] prg;
+        delete[] chr;
+    }
+
     void init() {
         memset(this, 0, sizeof(*this));
         sp = 0xFD;
@@ -137,7 +142,6 @@ struct NES {
 
         // VRAM mirroring handled in ppu_read/ppu_write using header[6] & 1
 
-        init();
         // Set PC from reset vector (at $FFFC-$FFFD in CPU space)
         pc = rb(0xFFFC) | (rb(0xFFFD) << 8);
         return true;
@@ -161,7 +165,7 @@ struct NES {
                 if (mirror == 0) { // vertical
                     if (addr >= 0x800) addr -= 0x800;
                 } else { // horizontal
-                    if (addr >= 0x400 && addr < 0x800) addr -= 0x400;
+                    if (addr >= 0x400 && addr < 0xC00) addr -= 0x400;
                     else if (addr >= 0xC00) addr -= 0x800;
                 }
                 return vram[addr % 0x800];
@@ -173,7 +177,7 @@ struct NES {
                 if (mirror == 0) {
                     if (addr >= 0x800) addr -= 0x800;
                 } else {
-                    if (addr >= 0x400 && addr < 0x800) addr -= 0x400;
+                    if (addr >= 0x400 && addr < 0xC00) addr -= 0x400;
                     else if (addr >= 0xC00) addr -= 0x800;
                 }
                 return vram[addr % 0x800];
@@ -200,7 +204,7 @@ struct NES {
                 if (mirror == 0) {
                     if (addr >= 0x800) addr -= 0x800;
                 } else {
-                    if (addr >= 0x400 && addr < 0x800) addr -= 0x400;
+                    if (addr >= 0x400 && addr < 0xC00) addr -= 0x400;
                     else if (addr >= 0xC00) addr -= 0x800;
                 }
                 vram[addr % 0x800] = val;
@@ -212,7 +216,7 @@ struct NES {
                 if (mirror == 0) {
                     if (addr >= 0x800) addr -= 0x800;
                 } else {
-                    if (addr >= 0x400 && addr < 0x800) addr -= 0x400;
+                    if (addr >= 0x400 && addr < 0xC00) addr -= 0x400;
                     else if (addr >= 0xC00) addr -= 0x800;
                 }
                 vram[addr % 0x800] = val;
@@ -432,7 +436,7 @@ struct NES {
 
     uint16_t pop16() {
         sp += 2;
-        return rb(0x0100 + sp) | (rb(0x0100 + sp - 1) << 8);
+        return rb(0x0100 + sp - 1) | (rb(0x0100 + sp) << 8);
     }
 
     void push8(uint8_t v) {

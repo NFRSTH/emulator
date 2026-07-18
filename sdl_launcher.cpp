@@ -394,10 +394,22 @@ static bool run_chip8(const char* path, SDL_Window* win) {
             }
             if (e.type == SDL_KEYUP) {
                 int k = e.key.keysym.scancode;
-                for (int i = 0; i < 16; i++) {
-                    int sc = (i == 0 ? SDL_SCANCODE_X : i == 1 ? SDL_SCANCODE_1 : i == 2 ? SDL_SCANCODE_2 : i == 3 ? SDL_SCANCODE_3 : i == 4 ? SDL_SCANCODE_4 : i == 5 ? SDL_SCANCODE_Q : i == 6 ? SDL_SCANCODE_W : i == 7 ? SDL_SCANCODE_E : i == 8 ? SDL_SCANCODE_R : i == 9 ? SDL_SCANCODE_A : i == 10 ? SDL_SCANCODE_S : i == 11 ? SDL_SCANCODE_D : i == 12 ? SDL_SCANCODE_F : i == 13 ? SDL_SCANCODE_Z : i == 14 ? SDL_SCANCODE_C : SDL_SCANCODE_V);
-                    if (k == sc) c8.keys[i] = false;
-                }
+                if (k == SDL_SCANCODE_X) c8.keys[0] = false;
+                else if (k == SDL_SCANCODE_1) c8.keys[1] = false;
+                else if (k == SDL_SCANCODE_2) c8.keys[2] = false;
+                else if (k == SDL_SCANCODE_3) c8.keys[3] = false;
+                else if (k == SDL_SCANCODE_4) c8.keys[4] = false;
+                else if (k == SDL_SCANCODE_Q) c8.keys[5] = false;
+                else if (k == SDL_SCANCODE_W) c8.keys[6] = false;
+                else if (k == SDL_SCANCODE_E) c8.keys[7] = false;
+                else if (k == SDL_SCANCODE_R) c8.keys[8] = false;
+                else if (k == SDL_SCANCODE_A) c8.keys[9] = false;
+                else if (k == SDL_SCANCODE_S) c8.keys[0xA] = false;
+                else if (k == SDL_SCANCODE_D) c8.keys[0xB] = false;
+                else if (k == SDL_SCANCODE_F) c8.keys[0xC] = false;
+                else if (k == SDL_SCANCODE_Z) c8.keys[0xD] = false;
+                else if (k == SDL_SCANCODE_C) c8.keys[0xE] = false;
+                else if (k == SDL_SCANCODE_V) c8.keys[0xF] = false;
             }
         }
         if (!c8_run) break;

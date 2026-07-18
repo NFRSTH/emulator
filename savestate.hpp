@@ -11,14 +11,17 @@
 
 struct SaveState {
     FILE* f;
+    bool writing;
 
     bool open_read(const char* path) {
         f = fopen(path, "rb");
+        writing = false;
         return f != nullptr;
     }
 
     bool open_write(const char* path) {
         f = fopen(path, "wb");
+        writing = true;
         return f != nullptr;
     }
 
@@ -28,8 +31,10 @@ struct SaveState {
 
     void rw(void* data, int size) {
         if (f) {
-            if (fwrite(data, 1, size, f) != (size_t)size
-                && fread(data, 1, size, f) != (size_t)size) {}
+            if (writing)
+                fwrite(data, 1, size, f);
+            else
+                fread(data, 1, size, f);
         }
     }
 
