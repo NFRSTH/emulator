@@ -1049,7 +1049,6 @@ static void show_add(HWND p) {
 
 // ===================== Settings Dialog =====================
 static ConsoleEntry* set_entry = nullptr;
-static int set_capturing = -1;
 static HWND set_hwnd, set_list;
 static int set_result;
 
@@ -1075,6 +1074,99 @@ static const char* key_display(int k) {
     }
 }
 
+static int key_from_name(const char* name) {
+    if (!name || !name[0]) return 0;
+    if (strlen(name) == 1) {
+        char c = name[0];
+        if (c >= 'A' && c <= 'Z') return c;
+        if (c >= '0' && c <= '9') return c;
+    }
+    struct { const char* n; int k; } map[] = {
+        {"Up",VK_UP},{"Down",VK_DOWN},{"Left",VK_LEFT},{"Right",VK_RIGHT},
+        {"Enter",VK_RETURN},{"Backspace",VK_BACK},{"Space",VK_SPACE},
+        {"Shift",VK_SHIFT},{"Ctrl",VK_CONTROL},{"Alt",VK_MENU},
+        {"Tab",VK_TAB},{"Esc",VK_ESCAPE},{"Del",VK_DELETE},
+        {"Home",VK_HOME},{"End",VK_END},{"PgUp",VK_PRIOR},{"PgDn",VK_NEXT},
+        {"Ins",VK_INSERT},
+        {"F1",VK_F1},{"F2",VK_F2},{"F3",VK_F3},{"F4",VK_F4},
+        {"F5",VK_F5},{"F6",VK_F6},{"F7",VK_F7},{"F8",VK_F8},
+        {"F9",VK_F9},{"F10",VK_F10},{"F11",VK_F11},{"F12",VK_F12},
+    };
+    for (auto& m : map) if (_stricmp(name, m.n) == 0) return m.k;
+    return 0;
+}
+
+static void refr_set_list();
+
+// Key input dialog
+static int kb_edit_idx;
+static HWND kb_edit;
+static LRESULT CALLBACK kb_wp(HWND h, UINT m, WPARAM w, LPARAM l) {
+    switch (m) {
+        case WM_CREATE: {
+            CreateWindowExA(0,"STATIC","Enter key name (e.g. A, Space, Up, F1):",WS_CHILD|WS_VISIBLE,12,12,260,20,h,0,GetModuleHandle(NULL),0);
+            kb_edit = CreateWindowExA(WS_EX_CLIENTEDGE,"EDIT","",WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL,12,40,260,24,h,0,GetModuleHandle(NULL),0);
+            CreateWindowExA(0,"BUTTON","OK",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,70,76,70,28,h,(HMENU)IDOK,GetModuleHandle(NULL),0);
+            CreateWindowExA(0,"BUTTON","Cancel",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,150,76,70,28,h,(HMENU)IDCANCEL,GetModuleHandle(NULL),0);
+            SendMessage(kb_edit, WM_SETFONT, (WPARAM)CreateFontA(14,0,0,0,FW_NORMAL,0,0,0,ANSI_CHARSET,0,0,0,0,"Segoe UI"), 1);
+            SetFocus(kb_edit);
+            return 0;
+        }
+        case WM_COMMAND: {
+            if (LOWORD(w) == IDOK) {
+                char buf[64]; GetWindowTextA(kb_edit, buf, sizeof(buf));
+                int vk = key_from_name(buf);
+                if (vk == 0) {
+                    MessageBoxA(h, "Unknown key name.\nTry: A, B, Space, Up, Enter, F1, etc.", "Invalid Key", MB_OK|MB_ICONWARNING);
+                    SetFocus(kb_edit);
+                    return 0;
+                }
+                if (set_entry && kb_edit_idx >= 0 && kb_edit_idx < (int)set_entry->key_bindings.size()) {
+                    int conflict = -1;
+                    for (size_t i = 0; i < set_entry->key_bindings.size(); i++) {
+                        if ((int)i != kb_edit_idx && set_entry->key_bindings[i].key == vk) {
+                            conflict = i; break;
+                        }
+                    }
+                    if (conflict >= 0) {
+                        char buf2[512];
+                        snprintf(buf2, sizeof(buf2), "'%s' already uses '%s'.\n\nRebind anyway?", 
+                                 set_entry->key_bindings[conflict].action.c_str(), buf);
+                        if (MessageBoxA(h, buf2, "Key Conflict", MB_YESNO|MB_ICONWARNING) != IDYES) {
+                            SetFocus(kb_edit);
+                            return 0;
+                        }
+                    }
+                    set_entry->key_bindings[kb_edit_idx].key = vk;
+                }
+                DestroyWindow(h);
+            } else if (LOWORD(w) == IDCANCEL) {
+                DestroyWindow(h);
+            }
+            return 0;
+        }
+        case WM_CLOSE: DestroyWindow(h); return 0;
+    }
+    return DefWindowProcA(h, m, w, l);
+}
+
+static void show_key_dialog(HWND parent, int idx) {
+    kb_edit_idx = idx;
+    WNDCLASSA kc = {0}; kc.lpfnWndProc = kb_wp; kc.hInstance = GetModuleHandle(NULL);
+    kc.hCursor = LoadCursor(NULL, IDC_ARROW); kc.hbrBackground = (HBRUSH)(COLOR_WINDOW+1);
+    kc.lpszClassName = "KeyCls"; RegisterClassA(&kc);
+    RECT pr; GetWindowRect(parent, &pr);
+    HWND h = CreateWindowExA(0, "KeyCls", "Bind Key", WS_CAPTION|WS_SYSMENU, pr.left+50, pr.top+50, 300, 150, parent, 0, GetModuleHandle(NULL), 0);
+    if (!h) return;
+    ShowWindow(h, SW_SHOW);
+    MSG msg; while (GetMessageA(&msg, NULL, 0, 0)) {
+        if (!IsWindow(h)) break;
+        if (!IsDialogMessage(h, &msg)) { TranslateMessage(&msg); DispatchMessageA(&msg); }
+    }
+    UnregisterClassA("KeyCls", GetModuleHandle(NULL));
+    refr_set_list();
+}
+
 static void refr_set_list() {
     ListView_DeleteAllItems(set_list);
     if (!set_entry) return;
@@ -1082,8 +1174,7 @@ static void refr_set_list() {
         auto& kb = set_entry->key_bindings[i];
         char act[64], kname[32];
         strcpy(act, kb.action.c_str());
-        if ((int)i == set_capturing) strcpy(kname, "[ Press Key... ]");
-        else strcpy(kname, key_display(kb.key));
+        strcpy(kname, key_display(kb.key));
         LVITEMA it = {0}; it.mask = LVIF_TEXT; it.pszText = act; it.iItem = i;
         ListView_InsertItem(set_list, &it);
         ListView_SetItemText(set_list, i, 1, kname);
@@ -1093,8 +1184,7 @@ static void refr_set_list() {
 static LRESULT CALLBACK set_wp(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
         case WM_CREATE: {
-            set_capturing = -1;
-            CreateWindowExA(0,"STATIC","Click a row, then press the key to bind.",WS_CHILD|WS_VISIBLE,10,10,380,20,h,0,GetModuleHandle(NULL),0);
+            CreateWindowExA(0,"STATIC","Double-click a row to bind a key.",WS_CHILD|WS_VISIBLE,10,10,380,20,h,0,GetModuleHandle(NULL),0);
             set_list = CreateWindowExA(0, WC_LISTVIEWA, "", WS_CHILD|WS_VISIBLE|LVS_REPORT, 10, 35, 380, 220, h, 0, GetModuleHandle(NULL), 0);
             LVCOLUMNA col = {0}; col.mask = LVCF_TEXT|LVCF_WIDTH;
             col.cx = 150; col.pszText = (char*)"Action"; ListView_InsertColumn(set_list, 0, &col);
@@ -1113,7 +1203,6 @@ static LRESULT CALLBACK set_wp(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (LOWORD(w) == IDOK) { set_result = 1; DestroyWindow(h); }
             else if (LOWORD(w) == IDCANCEL) { set_result = 0; DestroyWindow(h); }
             else if (LOWORD(w) == 100) {
-                // Reset defaults
                 if (set_entry) {
                     set_entry->key_bindings.clear();
                     if (set_entry->name == "Gameboy") set_default_bindings(*set_entry, GB_ACTIONS, GB_DEFAULT_KEYS);
@@ -1122,7 +1211,6 @@ static LRESULT CALLBACK set_wp(HWND h, UINT m, WPARAM w, LPARAM l) {
                     else if (set_entry->name == "Atari 2600") set_default_bindings(*set_entry, A26_ACTIONS, A26_DEFAULT_KEYS);
                     else if (set_entry->name == "NES") set_default_bindings(*set_entry, NES_ACTIONS, NES_DEFAULT_KEYS);
                     else if (set_entry->name == "Sega Master System") set_default_bindings(*set_entry, SMS_ACTIONS, SMS_DEFAULT_KEYS);
-                    set_capturing = -1;
                     refr_set_list();
                 }
             }
@@ -1132,55 +1220,10 @@ static LRESULT CALLBACK set_wp(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (nm->hwndFrom == set_list && nm->code == NM_DBLCLK) {
                 int idx = ListView_GetNextItem(set_list, -1, LVNI_SELECTED);
                 if (idx >= 0 && idx < (int)set_entry->key_bindings.size()) {
-                    set_capturing = idx;
-                    refr_set_list();
-                    SetFocus(set_list);
+                    show_key_dialog(h, idx);
                 }
             }
             return 0;
-        }
-        case WM_KEYDOWN: {
-            if (set_capturing >= 0 && set_entry && set_capturing < (int)set_entry->key_bindings.size()) {
-                int vk = w & 0xFF;
-                if (vk == VK_ESCAPE) { set_capturing = -1; refr_set_list(); return 0; }
-
-                // Check if another action already uses this key
-                int conflict = -1;
-                for (size_t i = 0; i < set_entry->key_bindings.size(); i++) {
-                    if ((int)i != set_capturing && set_entry->key_bindings[i].key == vk) {
-                        conflict = i; break;
-                    }
-                }
-
-                if (conflict >= 0) {
-                    char buf[512];
-                    snprintf(buf, sizeof(buf), "'%s' already uses '%s'.\n\nStill rebind '%s' to '%s'?",
-                             set_entry->key_bindings[conflict].action.c_str(),
-                             key_display(vk),
-                             set_entry->key_bindings[set_capturing].action.c_str(),
-                             key_display(vk));
-
-                    if (MessageBoxA(h, buf, "Key Conflict", MB_YESNO | MB_ICONWARNING) == IDYES) {
-                        set_entry->key_bindings[set_capturing].key = vk;
-
-                        char buf2[512];
-                        snprintf(buf2, sizeof(buf2), "Would you like to change '%s' key?",
-                                 set_entry->key_bindings[conflict].action.c_str());
-
-                        if (MessageBoxA(h, buf2, "Change Conflicting Key", MB_YESNO | MB_ICONQUESTION) == IDYES)
-                            set_capturing = conflict;
-                        else
-                            set_capturing = -1;
-                    }
-                } else {
-                    set_entry->key_bindings[set_capturing].key = vk;
-                    set_capturing = -1;
-                }
-
-                refr_set_list();
-                return 0;
-            }
-            return DefWindowProcA(h, m, w, l);
         }
         case WM_CLOSE: set_result = 0; DestroyWindow(h); return 0;
     }
@@ -1200,11 +1243,8 @@ static void show_settings(HWND p, int idx) {
     EnableWindow(p, FALSE); ShowWindow(h, SW_SHOW);
     MSG msg; while (GetMessageA(&msg, NULL, 0, 0)) {
         if (!IsWindow(h)) break;
-        // Skip IsDialogMessage while capturing keys so WM_KEYDOWN reaches our handler
-        if (set_capturing >= 0 || !IsDialogMessage(h, &msg)) {
-            TranslateMessage(&msg);
-            DispatchMessageA(&msg);
-        }
+        TranslateMessage(&msg);
+        DispatchMessageA(&msg);
     }
     EnableWindow(p, TRUE); SetForegroundWindow(p); UnregisterClassA("SetCls", GetModuleHandle(NULL));
     if (set_result) save_cfg();
